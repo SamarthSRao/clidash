@@ -1,9 +1,10 @@
 package ui
 
 import (
-	"clidash/internal/engine"
-	"clidash/internal/models"
+	"clidash/pkg/api"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -48,7 +49,7 @@ var (
 )
 
 type model struct {
-	engine  *engine.Engine
+	state   api.GlobalState
 	help    help.Model
 	keys    keyMap
 	logs    []string
@@ -78,10 +79,10 @@ var keys = keyMap{
 
 func InitialModel() model {
 	return model{
-		engine: engine.NewEngine(),
-		help:   help.New(),
-		keys:   keys,
-		logs:   make([]string, 0),
+		state: api.GlobalState{Services: make(map[string]api.TelemetryUpdate)},
+		help:  help.New(),
+		keys:  keys,
+		logs:  make([]string, 0),
 	}
 }
 
@@ -101,11 +102,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 	case tickMsg:
-		m.engine.Update()
+		// Fetch state from Optimizer
+		resp, err := http.Get("http://localhost:8080/state")
+		if err == nil {
+			var newState api.GlobalState
+			if err := json.NewDecoder(resp.Body).Decode(&newState); err == nil {
+				m.state = newState
+			}
+			resp.Body.Close()
+		}
 
-		// Add aggregate traffic to history
+		// Update history log
 		totalTraffic := 0
-		for _, s := range m.engine.Services {
+		for _, s := range m.state.Services {
 			totalTraffic += s.RequestsPerSec
 		}
 		m.history = append(m.history, float64(totalTraffic))
@@ -113,8 +122,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.history = m.history[1:]
 		}
 
-		if m.engine.State.LastDecision != "" {
-			m.logs = append([]string{fmt.Sprintf("[%s] %s", time.Now().Format("15:04:05"), m.engine.State.LastDecision)}, m.logs...)
+		if m.state.LastDecision != "" {
+			if len(m.logs) == 0 || !strings.Contains(m.logs[0], m.state.LastDecision) {
+				m.logs = append([]string{fmt.Sprintf("[%s] %s", time.Now().Format("15:04:05"), m.state.LastDecision)}, m.logs...)
+			}
 			if len(m.logs) > 10 {
 				m.logs = m.logs[:10]
 			}
@@ -131,39 +142,31 @@ func (m model) View() string {
 
 	// Header
 	header := titleStyle.Render("CLIDASH - RL Dynamic Consistency Optimizer")
-	agentStatus := fmt.Sprintf("Agent: %s | Reward: %.1f | Confidence: %.2f | Decisions: %d",
-		statusStyle.Render("ONLINE"),
-		m.engine.State.Reward,
-		m.engine.State.Confidence,
-		m.engine.State.DecisionsCount,
+	agentStatus := fmt.Sprintf("Optimizer: %s | Reward: %.1f | Mode: %s | Active Agents: %d",
+		statusStyle.Render("ONLINE (8080)"),
+		m.state.Reward,
+		lipgloss.NewStyle().Foreground(lipgloss.Color("#BD93F9")).Render("DISTRIBUTED"),
+		len(m.state.Services),
 	)
 	s.WriteString(header + "\n" + agentStatus + "\n\n")
 
-	// Service Grid
+	// Service Grid (Dynamic from Agents)
 	var serviceViews []string
-	for _, svc := range m.engine.Services {
-		constStyle := strongStyle
-		if svc.Consistency == models.Eventual {
-			constStyle = eventualStyle
-		}
-
-		serviceInfo := fmt.Sprintf("%-20s\nMode: %s\nLatency: %v\nLoad: %d rps",
-			lipgloss.NewStyle().Bold(true).Render(svc.Name),
-			constStyle.Render(string(svc.Consistency)),
-			svc.Latency,
+	for id, svc := range m.state.Services {
+		serviceInfo := fmt.Sprintf("%-20s\nStatus: %s\nLatency: %.1fms\nLoad: %d rps",
+			lipgloss.NewStyle().Bold(true).Render(id),
+			strongStyle.Render("CONNECTED"),
+			svc.LatencyMS,
 			svc.RequestsPerSec,
 		)
-
-		criticalMark := ""
-		if svc.IsCritical {
-			criticalMark = criticalStyle.Render(" [CRITICAL]")
-		}
-
-		serviceViews = append(serviceViews, boxStyle.Render(serviceInfo+criticalMark))
+		serviceViews = append(serviceViews, boxStyle.Render(serviceInfo))
 	}
 
-	s.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, serviceViews[0], serviceViews[1], serviceViews[2]) + "\n")
-	s.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, serviceViews[3], serviceViews[4]) + "\n\n")
+	if len(serviceViews) > 0 {
+		s.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, serviceViews...) + "\n\n")
+	} else {
+		s.WriteString("Waiting for Agent telemetry...\n\n")
+	}
 
 	// Graph
 	graph := ""
@@ -175,9 +178,9 @@ func (m model) View() string {
 	// Stats and Logs
 	stats := boxStyle.Width(30).Render(fmt.Sprintf(
 		"SYSTEM PERFORMANCE\n\nLatency Saved: %s\nSLA Compliance: %s\nEfficiency: %s",
-		lipgloss.NewStyle().Foreground(lipgloss.Color("#50FA7B")).Render(fmt.Sprintf("%.1fms", m.engine.State.LatencyReduction)),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("#50FA7B")).Render("Dynamic"),
 		lipgloss.NewStyle().Foreground(lipgloss.Color("#50FA7B")).Render("99.5%"),
-		lipgloss.NewStyle().Foreground(lipgloss.Color("#50FA7B")).Render("3.2x"),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("#50FA7B")).Render("Distributed"),
 	))
 
 	logContent := "DECISION LOG:\n" + strings.Join(m.logs, "\n")
