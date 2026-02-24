@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clidash-optimizer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: clidash-optimizer
+  template:
+    metadata:
+      labels:
+        app: clidash-optimizer
+    spec:
+      containers:
+      - name: optimizer
+        image: clidash-optimizer:latest # Replace with your registry image
+        ports:
+        - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clidash-optimizer
+spec:
+  selector:
+    app: clidash-optimizer
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8080
+  type: ClusterIP

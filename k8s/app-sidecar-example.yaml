@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-ecommerce-app
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: ecommerce
+  template:
+    metadata:
+      labels:
+        app: ecommerce
+    spec:
+      containers:
+      # 1. THE MAIN APPLICATION
+      - name: app
+        image: my-store-app:latest
+        env:
+        - name: CLIDASH_AGENT_URL
+          value: "localhost:5775"
+        ports:
+        - containerPort: 3000
+
+      # 2. THE CLIDASH AGENT (SIDECAR)
+      - name: clidash-sidecar
+        image: clidash-agent:latest # Replace with your registry image
+        env:
+        - name: SERVICE_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name # Uses pod name as unique service ID
+        - name: OPTIMIZER_URL
+          value: "http://clidash-optimizer.default.svc.cluster.local/metrics"
+        ports:
+        - containerPort: 5775
